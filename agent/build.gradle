@@ -1,8 +1,9 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import org.gradle.api.file.RegularFile
 
 plugins {
   id("com.gradleup.shadow")
-  id("maven-publish")
+  id("org.cyclonedx.bom") version "3.4.1"
 }
 
 apply from: "$rootDir/gradle/shadow.gradle"
@@ -25,57 +26,28 @@ configurations {
     canBeResolved = true
     canBeConsumed = false
   }
+  upstreamSbom {
+    canBeResolved = true
+    canBeConsumed = false
+  }
 }
 
 dependencies {
   javaagentLibs(project(":custom"))
 
   upstreamAgent("io.opentelemetry.javaagent:opentelemetry-javaagent:${versions.opentelemetryJavaagent}")
+  upstreamSbom("io.opentelemetry.javaagent:opentelemetry-javaagent:${versions.opentelemetryJavaagent}:spdx@json")
 }
 
-publishing {
-  publications {
-    agent(MavenPublication) {
-      groupId = rootProject.group
-      artifactId = rootProject.name
-      version = rootProject.version
-
-      pom {
-        name = "Grafana OpenTelemetry Distribution for Java"
-        description = "OpenTelemetry Java agent distribution optimized for Grafana Cloud Application Observability"
-        url = "https://github.com/grafana/grafana-opentelemetry-java"
-        licenses {
-          license {
-            name = "The Apache License, Version 2.0"
-            url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
-          }
-        }
-        scm {
-          connection = "scm:git:https://github.com/grafana/grafana-opentelemetry-java.git"
-          developerConnection = "scm:git:ssh://git@github.com/grafana/grafana-opentelemetry-java.git"
-          url = "https://github.com/grafana/grafana-opentelemetry-java"
-        }
-        withXml {
-          def pom = asNode()
-          pom.packaging[0].value = "jar"
-          def dependency = pom.appendNode("dependencies").appendNode("dependency")
-          dependency.appendNode("groupId", "io.opentelemetry.javaagent")
-          dependency.appendNode("artifactId", "opentelemetry-javaagent")
-          dependency.appendNode("version", versions.opentelemetryJavaagent)
-          dependency.appendNode("scope", "runtime")
-        }
-      }
-    }
-  }
-}
-
-def pomMetadataPath = "META-INF/maven/${rootProject.group}/${rootProject.name}"
-
-def generatePomProperties = tasks.register("generatePomProperties", WriteProperties) {
-  destinationFile = layout.buildDirectory.file("generated/pom/pom.properties")
-  property("groupId", rootProject.group)
-  property("artifactId", rootProject.name)
-  property("version", rootProject.version)
+tasks.named("cyclonedxDirectBom") {
+  includeConfigs = ["javaagentLibs", "upstreamAgent"]
+  projectType = "application"
+  componentGroup = rootProject.group
+  componentName = rootProject.name
+  componentVersion = rootProject.version
+  includeBomSerialNumber = false
+  jsonOutput = layout.buildDirectory.file("generated/sbom/grafana-opentelemetry-java.cdx.json")
+  xmlOutput.convention((RegularFile) null)
 }
 
 CopySpec isolateClasses(Iterable<File> jars) {
@@ -146,14 +118,14 @@ tasks {
     configurations = [project.configurations.bootstrapLibs, project.configurations.upstreamAgent]
 
     dependsOn(tasks.isolateJavaagentLibs)
-    dependsOn(tasks.generatePomFileForAgentPublication, generatePomProperties)
+    dependsOn(tasks.cyclonedxDirectBom)
     from(tasks.isolateJavaagentLibs.outputs)
-    from(tasks.generatePomFileForAgentPublication.destination) {
-      into(pomMetadataPath)
-      rename { "pom.xml" }
+    from(tasks.cyclonedxDirectBom) {
+      into("META-INF/sbom")
     }
-    from(generatePomProperties) {
-      into(pomMetadataPath)
+    from(project.configurations.upstreamSbom) {
+      into("META-INF/sbom")
+      rename { "opentelemetry-javaagent.spdx.json" }
     }
 
     archiveClassifier.set("all")
