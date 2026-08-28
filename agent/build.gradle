@@ -2,6 +2,7 @@ import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 
 plugins {
   id("com.gradleup.shadow")
+  id("maven-publish")
 }
 
 apply from: "$rootDir/gradle/shadow.gradle"
@@ -30,6 +31,51 @@ dependencies {
   javaagentLibs(project(":custom"))
 
   upstreamAgent("io.opentelemetry.javaagent:opentelemetry-javaagent:${versions.opentelemetryJavaagent}")
+}
+
+publishing {
+  publications {
+    agent(MavenPublication) {
+      groupId = rootProject.group
+      artifactId = rootProject.name
+      version = rootProject.version
+
+      pom {
+        name = "Grafana OpenTelemetry Distribution for Java"
+        description = "OpenTelemetry Java agent distribution optimized for Grafana Cloud Application Observability"
+        url = "https://github.com/grafana/grafana-opentelemetry-java"
+        licenses {
+          license {
+            name = "The Apache License, Version 2.0"
+            url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+          }
+        }
+        scm {
+          connection = "scm:git:https://github.com/grafana/grafana-opentelemetry-java.git"
+          developerConnection = "scm:git:ssh://git@github.com/grafana/grafana-opentelemetry-java.git"
+          url = "https://github.com/grafana/grafana-opentelemetry-java"
+        }
+        withXml {
+          def pom = asNode()
+          pom.packaging[0].value = "jar"
+          def dependency = pom.appendNode("dependencies").appendNode("dependency")
+          dependency.appendNode("groupId", "io.opentelemetry.javaagent")
+          dependency.appendNode("artifactId", "opentelemetry-javaagent")
+          dependency.appendNode("version", versions.opentelemetryJavaagent)
+          dependency.appendNode("scope", "runtime")
+        }
+      }
+    }
+  }
+}
+
+def pomMetadataPath = "META-INF/maven/${rootProject.group}/${rootProject.name}"
+
+def generatePomProperties = tasks.register("generatePomProperties", WriteProperties) {
+  destinationFile = layout.buildDirectory.file("generated/pom/pom.properties")
+  property("groupId", rootProject.group)
+  property("artifactId", rootProject.name)
+  property("version", rootProject.version)
 }
 
 CopySpec isolateClasses(Iterable<File> jars) {
@@ -100,7 +146,15 @@ tasks {
     configurations = [project.configurations.bootstrapLibs, project.configurations.upstreamAgent]
 
     dependsOn(tasks.isolateJavaagentLibs)
+    dependsOn(tasks.generatePomFileForAgentPublication, generatePomProperties)
     from(tasks.isolateJavaagentLibs.outputs)
+    from(tasks.generatePomFileForAgentPublication.destination) {
+      into(pomMetadataPath)
+      rename { "pom.xml" }
+    }
+    from(generatePomProperties) {
+      into(pomMetadataPath)
+    }
 
     archiveClassifier.set("all")
 
